@@ -91,3 +91,29 @@ def test_stop_file_flattens(pair, tmp_path, monkeypatch):
     (tmp_path / "STOP").touch()
     state = live.step(cfg, broker, state, prices=pair.iloc[:301])
     assert state["halted"] and not broker.get_positions()
+
+
+def test_coint_filter_blocks_entries_on_unrelated_walks():
+    rng = np.random.default_rng(3)
+    a = pd.Series(100 + rng.normal(size=800).cumsum())
+    b = pd.Series(100 + rng.normal(size=800).cumsum())
+    p = Params(hedge_window=60, z_window=30, coint_window=250, coint_pvalue=0.01)
+    filtered = compute_signals(a, b, p).position.abs().sum()
+    unfiltered = compute_signals(a, b, Params(hedge_window=60, z_window=30)).position.abs().sum()
+    assert filtered < unfiltered
+
+
+def test_coint_filter_has_no_lookahead(pair):
+    p = Params(coint_window=250)
+    full = compute_signals(pair.Y, pair.X, p)
+    part = compute_signals(pair.Y.iloc[:700], pair.X.iloc[:700], p)
+    pd.testing.assert_series_equal(full.position.iloc[:700], part.position)
+
+
+def test_walk_forward_is_out_of_sample(pair):
+    from pairtrader.optimize import walk_forward
+    grid = {"hedge_window": [60], "z_window": [30], "entry_z": [1.5, 2.0], "exit_z": [0.5], "stop_z": [4.0]}
+    m = walk_forward(pair, "Y", "X", grid=grid, train_bars=500, test_bars=100)
+    assert m["folds"] == 7
+    assert pd.Timestamp(m["oos_start"]) == pair.index[500]
+    assert m["sharpe"] > 0

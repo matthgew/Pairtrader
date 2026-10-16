@@ -6,7 +6,7 @@ are **real**, not ones that only exist in the backtest.
 
 ## Experiment loop
 
-1. Read `results/experiments.jsonl` first so you don't repeat what's been tried.
+1. Read `results/FINDINGS.md` (summary) and `results/experiments.jsonl` (raw log) first so you don't repeat what's been tried. Update FINDINGS.md after each batch.
 2. Form a hypothesis (new pair, new universe, new rule, different bar size) and write it in `--note`.
 3. Run `python -m pairtrader optimize ...` or edit the code and run it.
 4. Judge it by the **test** metrics only. Train metrics are just the tuning set.
@@ -32,12 +32,16 @@ are **real**, not ones that only exist in the backtest.
   Only the owner does that.
 * Do not commit API keys; they live in environment variables or `.env` (gitignored).
 
+## Tools
+
+* `python experiments/batch.py --walk-forward [--coint-filter]` - many pairs at once
+* `Params(coint_window=250)` - rolling cointegration filter (done, see FINDINGS)
+* `optimize.walk_forward(...)` - re-tune every 6 months, chain the out-of-sample blocks
+
 ## Ideas worth trying
 
 * Kalman-filter hedge ratio instead of rolling OLS
 * Johansen test / baskets of 3+ assets
-* Re-test cointegration on a rolling window and only trade while it holds
 * Half-life-based z_window and max_hold
 * Volatility-scaled position sizing
-* Walk-forward optimisation (re-tune every N months, chain the test periods)
 * Sector ETF pairs, share classes (GOOG/GOOGL), country ETFs, crypto majors

@@ -139,7 +139,7 @@ def step(cfg: LiveConfig, broker, state: dict, prices: pd.DataFrame | None = Non
     """Run one decision cycle. Returns the updated state. Pure enough to unit-test."""
     p = cfg.params
     prices = _fetch(cfg) if prices is None else prices
-    need = max(p.hedge_window, p.z_window) + 2
+    need = max(p.hedge_window, p.z_window, p.coint_window) + 2
     if len(prices) < need:
         raise ValueError(f"Need {need} bars of history, got {len(prices)}; increase history_period.")
 
@@ -150,7 +150,11 @@ def step(cfg: LiveConfig, broker, state: dict, prices: pd.DataFrame | None = Non
     beta = float(betas.iloc[-1])
     z = float((spread.iloc[-1] - window.mean()) / window.std())
 
-    new_pos, held = next_position(state.get("position", 0.0), z, state.get("held", 0), p)
+    allow = True
+    if p.coint_window:
+        from statsmodels.tsa.stattools import coint
+        allow = coint(y.iloc[-p.coint_window:], x.iloc[-p.coint_window:])[1] <= p.coint_pvalue
+    new_pos, held = next_position(state.get("position", 0.0), z, state.get("held", 0), p, allow)
     py, px = float(y.iloc[-1]), float(x.iloc[-1])
     last = {cfg.y: py, cfg.x: px}
     eq = broker.equity(last)

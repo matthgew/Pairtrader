@@ -25,6 +25,8 @@ class Params:
     exit_z: float = 0.5       # close when |z| falls back inside this
     stop_z: float = 4.0       # stop out if |z| blows past this (relationship may have broken)
     max_hold: int = 0         # force exit after this many bars (0 = no limit)
+    coint_window: int = 0     # if >0, only open trades while the trailing window is cointegrated
+    coint_pvalue: float = 0.10  # ...at this Engle-Granger p-value
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -37,14 +39,42 @@ def rolling_hedge_ratio(y: pd.Series, x: pd.Series, window: int) -> pd.Series:
     return cov / var
 
 
-def next_position(prev: float, z: float, held: int, p: Params) -> tuple[float, int]:
+_COINT_CACHE: dict = {}
+
+
+def rolling_coint_pvalue(y: pd.Series, x: pd.Series, window: int, step: int = 20) -> pd.Series:
+    """Engle-Granger p-value on the trailing `window` bars, re-tested every `step` bars.
+
+    The value at bar t only uses bars <= t. Cached because grid searches call it
+    repeatedly with the same inputs.
+    """
+    from statsmodels.tsa.stattools import coint
+
+    key = (len(y), y.index[0], y.index[-1], float(y.iloc[-1]), float(x.iloc[-1]), window, step)
+    if key in _COINT_CACHE:
+        return _COINT_CACHE[key]
+    out = pd.Series(np.nan, index=y.index)
+    yv, xv = y.values, x.values
+    for t in range(window - 1, len(y), step):
+        out.iloc[t] = coint(yv[t - window + 1: t + 1], xv[t - window + 1: t + 1])[1]
+    out = out.ffill()
+    if len(_COINT_CACHE) > 256:
+        _COINT_CACHE.clear()
+    _COINT_CACHE[key] = out
+    return out
+
+
+def next_position(prev: float, z: float, held: int, p: Params, allow_entry: bool = True) -> tuple[float, int]:
     """One step of the trading rule. Shared by the backtest and the live loop.
 
-    Returns (new_position, bars_held).
+    allow_entry=False blocks new trades (e.g. the pair stopped looking cointegrated)
+    but still lets an open trade exit normally. Returns (new_position, bars_held).
     """
     if np.isnan(z):
         return 0.0, 0
     if prev == 0:
+        if not allow_entry:
+            return 0.0, 0
         if p.entry_z < z < p.stop_z:
             return -1.0, 0     # spread too high -> sell y, buy x
         if -p.stop_z < z < -p.entry_z:
@@ -66,11 +96,16 @@ def compute_signals(y: pd.Series, x: pd.Series, p: Params) -> pd.DataFrame:
     sd = spread.rolling(p.z_window).std()
     z = (spread - mu) / sd
 
+    if p.coint_window:
+        allow = (rolling_coint_pvalue(y, x, p.coint_window) <= p.coint_pvalue).values
+    else:
+        allow = np.ones(len(z), dtype=bool)
+
     pos = np.zeros(len(z))
     held = 0
     for t, zt in enumerate(z.values):
         prev = pos[t - 1] if t else 0.0
-        pos[t], held = next_position(prev, zt, held, p)
+        pos[t], held = next_position(prev, zt, held, p, bool(allow[t]))
 
     return pd.DataFrame(
         {"y": y, "x": x, "beta": beta, "spread": spread, "z": z, "position": pos},

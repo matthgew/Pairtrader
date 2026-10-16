@@ -98,3 +98,46 @@ def optimize_pair(
     with EXPERIMENT_LOG.open("a") as fh:
         fh.write(json.dumps(record) + "\n")
     return {"record": record, "leaderboard": board}
+
+
+def walk_forward(
+    prices: pd.DataFrame,
+    y_col: str,
+    x_col: str,
+    grid: dict | None = None,
+    train_bars: int = 756,
+    test_bars: int = 126,
+    score: str = "sharpe",
+    cost_bps: float = 5.0,
+) -> dict:
+    """Re-tune every `test_bars` on the previous `train_bars`, trade the next block,
+    and chain the out-of-sample blocks. Closer to how you'd actually run it.
+
+    Default: tune on ~3 years, trade the next ~6 months, roll forward.
+    Each block starts with its rolling windows warmed up on the preceding train data.
+    Position changes at block boundaries are not charged costs (small effect).
+    """
+    rets, poss, chosen = [], [], []
+    start = 0
+    while start + train_bars < len(prices):
+        train = prices.iloc[start:start + train_bars]
+        test = prices.iloc[start + train_bars:start + train_bars + test_bars]
+        board = grid_search(train[y_col], train[x_col], grid, score, cost_bps)
+        if board.empty:
+            rets.append(pd.Series(0.0, index=test.index))
+            poss.append(pd.Series(0.0, index=test.index))
+        else:
+            best = Params(**{k: type(v)(board.iloc[0][k]) for k, v in Params().to_dict().items()})
+            warm = max(best.hedge_window, best.z_window, best.coint_window)
+            block = prices.iloc[max(0, start + train_bars - warm):start + train_bars + test_bars]
+            res = run_backtest(block[y_col], block[x_col], best, cost_bps=cost_bps)
+            rets.append(res.frame["strategy_ret"].loc[test.index])
+            poss.append(res.frame["position"].loc[test.index])
+            chosen.append({"from": str(test.index[0].date()), **best.to_dict()})
+        start += test_bars
+    r, pos = pd.concat(rets), pd.concat(poss)
+    m = metrics(r, pos, _bars_per_year(r.index))
+    m["folds"] = len(rets)
+    m["params_by_fold"] = chosen
+    m["oos_start"] = str(r.index[0].date())
+    return m
