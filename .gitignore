@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+data_cache/
+results/live/
+.env
+STOP
